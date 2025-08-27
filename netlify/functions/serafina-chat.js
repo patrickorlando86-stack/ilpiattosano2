@@ -36,15 +36,29 @@ function tooMany(ip) {
   return false;
 }
 
-// Risposte locali per saluti/grazie (zero chiamate all'API)
-function localQuickReply(msg) {
-  const m = msg.toLowerCase().trim();
-  if (["ciao", "buongiorno", "buonasera", "hey", "hola"].includes(m)) {
-    return "Ciao! Come posso aiutarti sull’alimentazione dei bimbi? 😊";
-  }
-  if (["grazie", "thanks", "ok"].includes(m)) {
-    return "Di nulla! Se vuoi, chiedimi un’idea per merenda o cena. 🍎";
-  }
+// === Multilingua ===
+const SUPPORTED = new Set(["it","en","es","zh"]);
+const LANG_LABEL = { it: "italiano", en: "English", es: "español", zh: "简体中文" };
+
+// Risposte locali (zero token) per saluti/grazie in base alla lingua
+const QUICK = {
+  it: { greet: "Ciao! Come posso aiutarti sull’alimentazione dei bimbi? 😊",
+        thanks: "Di nulla! Vuoi un’idea per merenda o cena? 🍎" },
+  en: { greet: "Hi! How can I help with kids’ nutrition? 😊",
+        thanks: "You’re welcome! Want a snack or dinner idea? 🍎" },
+  es: { greet: "¡Hola! ¿Cómo puedo ayudarte con la alimentación infantil? 😊",
+        thanks: "¡De nada! ¿Quieres una idea para merienda o cena? 🍎" },
+  zh: { greet: "你好！我可以如何帮助孩子的营养饮食？😊",
+        thanks: "不客气！要不要一个加餐或晚餐的点子？🍎" }
+};
+
+const GREET_WORDS = ["ciao","buongiorno","buonasera","hey","hola","hello","hi","你好","嗨"];
+const THANKS_WORDS = ["grazie","thanks","gracias","ok","谢谢"];
+
+function localQuickReply(msg, lang) {
+  const m = (msg || "").toLowerCase().trim();
+  if (GREET_WORDS.includes(m)) return QUICK[lang].greet;
+  if (THANKS_WORDS.includes(m)) return QUICK[lang].thanks;
   return null;
 }
 
@@ -61,29 +75,36 @@ exports.handler = async (event) => {
     const ip = (event.headers["x-forwarded-for"] || "").split(",")[0] || "unknown";
     if (tooMany(ip)) return { statusCode: 429, headers, body: JSON.stringify({ error: "Troppi messaggi, attendi qualche secondo." }) };
 
-    const { message, locale = "it" } = JSON.parse(event.body || "{}");
-    if (!message || !message.trim()) return { statusCode: 400, headers, body: JSON.stringify({ error: "Messaggio mancante" }) };
+    const body = JSON.parse(event.body || "{}");
+    const rawLocale = (body.locale || "it").toString().slice(0,2).toLowerCase();
+    const lang = SUPPORTED.has(rawLocale) ? rawLocale : "it";
+
+    const message = (body.message || "").toString();
+    if (!message.trim()) return { statusCode: 400, headers, body: JSON.stringify({ error: "Messaggio mancante" }) };
     if (message.length > 500) return { statusCode: 400, headers, body: JSON.stringify({ error: "Messaggio troppo lungo" }) };
 
     // Risposta locale gratis?
-    const quick = localQuickReply(message);
+    const quick = localQuickReply(message, lang);
     if (quick) return { statusCode: 200, headers, body: JSON.stringify({ reply: quick }) };
 
     // Cache (stessa domanda entro 24h)
-    const k = keyOf(message, locale);
+    const k = keyOf(message, lang);
     const cached = getCache(k);
     if (cached) return { statusCode: 200, headers, body: JSON.stringify({ reply: cached }) };
 
-    // --- Prompt super-corto = meno token ---
-    const systemPrompt = "Sei la Dott.ssa Serafina, nutrizionista pediatrica. Rispondi in italiano in 1–2 frasi, tono gentile e pratico, max ~35 parole, max 1 emoji. Niente diagnosi; suggerisci alternative semplici per bambini.";
+    // --- Prompt super-corto = meno token, nella lingua richiesta ---
+    const systemPrompt =
+      `Sei la Dott.ssa Serafina, nutrizionista pediatrica. ` +
+      `Rispondi in ${LANG_LABEL[lang]} in 1–2 frasi (≤ ~35 parole), tono gentile e pratico, max 1 emoji. ` +
+      `Niente diagnosi; suggerisci alternative semplici per bambini.`;
 
     // Chiamata OpenAI "mini" + pochi token
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-        // Se usi più organizzazioni: "OpenAI-Organization": "org_XXXX"
+        "Content-Type": "application/json",
+        ...(process.env.OPENAI_ORG_ID ? { "OpenAI-Organization": process.env.OPENAI_ORG_ID } : {})
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
@@ -92,7 +113,7 @@ exports.handler = async (event) => {
           { role: "user", content: message }
         ],
         temperature: 0.5,
-        max_tokens: 90  // abbassa l’output
+        max_tokens: 90
       })
     });
 
@@ -104,7 +125,7 @@ exports.handler = async (event) => {
     }
 
     const data = await r.json();
-    const reply = data?.choices?.[0]?.message?.content?.trim() || "Puoi riformulare?";
+    const reply = data?.choices?.[0]?.message?.content?.trim() || (lang === "it" ? "Puoi riformulare?" : "Please rephrase?");
 
     setCache(k, reply); // salva in cache
     return { statusCode: 200, headers, body: JSON.stringify({ reply }) };
