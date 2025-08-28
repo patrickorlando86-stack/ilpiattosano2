@@ -55,10 +55,58 @@ const QUICK = {
 const GREET_WORDS = ["ciao","buongiorno","buonasera","hey","hola","hello","hi","你好","嗨"];
 const THANKS_WORDS = ["grazie","thanks","gracias","ok","谢谢"];
 
+// --- Estensioni mindful & red flag ---
+// parole chiave mindful
+const MINDFUL_WORDS = ["mindful", "consapevol", "fame nervosa", "abbuff", "assaggi lenti"];
+
+// risposte rapide mindful (zero token)
+const QUICK_MINDFUL = {
+  it: [
+    "Prova 3 respiri lenti prima di mangiare e un ‘assaggio lento’: mordi, mastica piano, descrivi il sapore. Chiedi: ho fame o solo voglia? 🙂",
+    "Fai un piatto piccolo e posa la forchetta tra i morsi: aiuta a sentire sazietà e gusti."
+  ],
+  en: [
+    "Try 3 slow breaths before eating and one ‘slow bite’: chew, notice taste, ask: hunger or just craving? 🙂",
+    "Use a smaller plate and put the fork down between bites to notice fullness and flavors."
+  ],
+  es: [
+    "Haz 3 respiraciones lentas antes de comer y un ‘bocado lento’: mastica y nota el sabor. ¿Hambre o antojo? 🙂",
+    "Usa un plato pequeño y deja el tenedor entre bocados para notar saciedad y sabores."
+  ],
+  zh: [
+    "开吃前做3次慢呼吸，先来一个“慢慢尝”：细嚼慢咽，留意味道。🙂",
+    "用小盘子，吃两口就放下餐具，给身体时间感受饱足。"
+  ]
+};
+
+// parole chiave rischio disturbi alimentari
+const RED_FLAGS = ["vomito volontario","lassativi","saltare pasti","perdita di peso","abbuffate"];
+
+// pick casuale
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+// --- Nuova localQuickReply con mindful & red flags ---
 function localQuickReply(msg, lang) {
   const m = (msg || "").toLowerCase().trim();
+
+  // saluti/grazie
   if (GREET_WORDS.includes(m)) return QUICK[lang].greet;
   if (THANKS_WORDS.includes(m)) return QUICK[lang].thanks;
+
+  // trigger mindful (zero token)
+  if (MINDFUL_WORDS.some(w => m.includes(w))) return pick(QUICK_MINDFUL[lang]);
+
+  // red flag → reindirizza al pediatra (zero token)
+  if (RED_FLAGS.some(w => m.includes(w))) {
+    const warn = {
+      it: "Tema delicato: parlane con il pediatra o un professionista. ❤️",
+      en: "Sensitive topic: please talk to your pediatrician. ❤️",
+      es: "Tema sensible: consulta al pediatra o a un profesional. ❤️",
+      zh: "较为敏感：请联系儿科医生或专业人士。❤️"
+    };
+    return warn[lang];
+  }
+
   return null;
 }
 
@@ -96,7 +144,8 @@ exports.handler = async (event) => {
     const systemPrompt =
       `Sei la Dott.ssa Serafina, nutrizionista pediatrica. ` +
       `Rispondi in ${LANG_LABEL[lang]} in 1–2 frasi (≤ ~35 parole), tono gentile e pratico, max 1 emoji. ` +
-      `Niente diagnosi; suggerisci alternative semplici per bambini.`;
+      `Integra spunti di “mangiare consapevole” (respiro, fame/sazietà, assaggi lenti). ` +
+      `Niente diagnosi; consiglia alternative semplici per bambini.`;
 
     // Chiamata OpenAI "mini" + pochi token
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
